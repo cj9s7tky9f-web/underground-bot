@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.exceptions import TelegramRetryAfter, TelegramUnauthorizedError, TelegramNetworkError, TelegramAPIError
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message, CallbackQuery
 from aiogram.client.default import DefaultBotProperties
@@ -463,7 +464,23 @@ async def main():
         raise RuntimeError("Не задан BOT_TOKEN. Добавь токен как переменную окружения BOT_TOKEN.")
     BOT = Bot(TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     log.info("UNDERGROUND bot starting")
-    await dp.start_polling(BOT)
+    # Telegram may rate-limit getMe during startup. Wait instead of crashing.
+    retry_delay = 5
+    while True:
+        try:
+            await dp.start_polling(BOT, handle_signals=True)
+            break
+        except TelegramRetryAfter as exc:
+            delay = max(float(exc.retry_after), 1.0) + 3.0
+            log.warning("Telegram rate limit during startup: waiting %.0f seconds", delay)
+            await asyncio.sleep(delay)
+        except TelegramUnauthorizedError:
+            log.error("BOT_TOKEN rejected by Telegram. Check Railway Variables.")
+            raise
+        except (TelegramNetworkError, TelegramAPIError) as exc:
+            log.warning("Telegram connection error: %s; retrying in %s seconds", exc, retry_delay)
+            await asyncio.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, 120)
 
 if __name__ == "__main__":
     asyncio.run(main())
